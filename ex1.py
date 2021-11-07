@@ -22,9 +22,9 @@ class Ngram_Language_Model:
         self.model_dict = defaultdict(
             int)  # a dictionary of the form {ngram:count}, holding counts of all ngrams in the specified text.
         self.use_chars = chars
-        self.V = None
-
-        self.context_dict = {}
+        self.V = None  # size of vocabulary
+        self.context_by_n = None
+        self.contexts_prob = []
 
     def build_model(self, text):
         """populates the instance variable model_dict.
@@ -33,39 +33,46 @@ class Ngram_Language_Model:
                 text (str): the text to construct the model from.
         """
         splitted = self.split(text)
+        self.context_by_n = {i: defaultdict(int) for i in range(0, self.n)}
 
-        for idx in range(len(splitted) - self.n + 1):
-            ngram = self.get_ngram_by_index(splitted, idx)
-            self.model_dict[ngram] += 1
-            context, last_gram = self.split_context_gram(ngram)
-            if context in self.context_dict:
-                if last_gram in self.context_dict[context]:
-                    self.context_dict[context][last_gram] += 1
+        for n in range(1, self.n + 1):
+            for idx in range(len(splitted) - 1, n - 2, -1):
+                ngram = self.get_ngram_by_last_index(splitted, idx, n)
+                context, last_gram = self.split_context_gram(ngram)
+                n_size_context = self.context_by_n[len(self.split(context))]
+                if context in n_size_context:
+                    if last_gram in n_size_context[context]:
+                        n_size_context[context][last_gram] += 1
+                    else:
+                        n_size_context[context][last_gram] = 1
                 else:
-                    self.context_dict[context][last_gram] = 1
-            else:
-                self.context_dict[context] = defaultdict(int)
-                self.context_dict[context][last_gram] = 1
+                    n_size_context[context] = {last_gram: 1}
+                if n == self.n:
+                    self.model_dict[ngram] += 1
         self.V = len(self.model_dict)
-        sum_per_context = [sum(self.context_dict[context].values()) for context in self.context_dict]
+        sum_per_context = [sum(self.context_by_n[self.n - 1][context].values()) for context in
+                           self.context_by_n[self.n - 1]]
         sum_all_context = sum(sum_per_context)
         self.contexts_prob = [context_sum / sum_all_context for context_sum in sum_per_context]
 
-    def get_ngram_by_index(self, s, idx):
+    def get_ngram_by_last_index(self, s, idx, n_size):
         """
-        Return ngram of size self.n starting at index idx
+        Return ngram of size self.n ends at index idx
 
             Args:
-               s (list): list of tokens from which the ngram is extracted
-                idx (int): the index from which to start buikd the ngram
+                s (list): list of tokens from which the ngram is extracted
+                idx (int): the index from which to start build (reversed) the ngram
+                n_size (int) the size of the ngram
             Retutns:
                 ngram (str). the ngram was extracted
 
         """
+        if n_size is None:
+            n_size = self.n
         if self.use_chars:
-            return s[idx:idx + self.n]
+            return "".join(s[max(idx - n_size + 1, 0): idx + 1])
         else:
-            return " ".join(s[idx: idx + self.n])
+            return " ".join(s[max(idx - n_size + 1, 0): idx + 1])
 
     def split_context_gram(self, ngram):
         """Return context and last gram from given ngram.
@@ -140,31 +147,41 @@ class Ngram_Language_Model:
 
         """
         context_len = 0 if context is None else len(self.split(context))
-        if context_len > n:
+        if context_len > n:  # context is longer than n - return the first n tokens
             return self.join(self.split(context)[:n])
-        if context_len < self.n - 1:
-            context += " " + self.get_initial_context(context)
+        if context_len < self.n - 1:  # The context needs to be completed
+            new_context = self.get_initial_context(context)
+            if new_context is None:
+                return context
+            context = new_context
 
         final_text = self.split(context)
         if len(final_text) > n:
             return self.join(self.split(context)[:n])
         while len(final_text) < n:
             next_gram = self.get_next_gram(final_text)
-            if next_gram is None: # context is exhausted
+            if next_gram is None:  # context is exhausted
                 return self.join(final_text)
             final_text.append(next_gram)
         return self.join(final_text)
 
     def get_initial_context(self, init_context):
         """
-            Sample the models' context distribution to get an initial context
-
+            Sample the models' context distribution to get an initial context.
+            If the initial context is exists, complete with the next grams we have see in the text.
             Returns:
-                context (str): An initial context
+                String. An initial context
 
         """
-        # if init_context is None or len(init_context.sp)
-        return choices(list(self.context_dict.keys()), self.contexts_prob)[0]
+        if init_context is None:
+            return choices(list(self.context_by_n[self.n - 1].keys()), self.contexts_prob)[0]
+        elif init_context in self.context_by_n[len(self.split(init_context))]:
+            context_dict = self.context_by_n[len(self.split(init_context))][init_context]
+            contexts_sum = sum(context_dict.values())
+            contexts_probs = [context_dict[gram] / contexts_sum for gram in context_dict]
+            return choices(list(context_dict.keys()), contexts_probs)[0]
+        else:
+            return None
 
     def get_next_gram(self, context):
         """
@@ -172,20 +189,22 @@ class Ngram_Language_Model:
         of the gram after the context.
 
         Returns:
-            gram (str): the chosen gram to be appropriate to the context.
+            String. the chosen gram to be appropriate to the context.
 
         """
         if self.n == 1:
             last_context = ''
         else:
             last_context = self.join(context[-(self.n - 1):])
-
-        if last_context not in self.context_dict:
+        last_context_len = len(self.split(last_context))
+        if last_context not in self.context_by_n[last_context_len]:
             return None
-        possible_gram = self.context_dict[last_context].keys()
-        possible_gram_probs_sum = sum(self.context_dict[last_context].values())
-        possible_gram_probs = [self.context_dict[last_context][gram] / possible_gram_probs_sum for gram in possible_gram]
-        return choices(list(self.context_dict[last_context].keys()), possible_gram_probs)[0]
+        possible_gram = self.context_by_n[last_context_len][last_context].keys()
+        possible_gram_probs_sum = sum(self.context_by_n[last_context_len][last_context].values())
+        possible_gram_probs = [self.context_by_n[last_context_len][last_context][gram] / possible_gram_probs_sum for
+                               gram in
+                               possible_gram]
+        return choices(list(self.context_by_n[last_context_len][last_context].keys()), possible_gram_probs)[0]
 
     def evaluate(self, text):
         """Returns the log-likelihood of the specified text to be a product of the model.
@@ -201,65 +220,46 @@ class Ngram_Language_Model:
         splitted = self.split(text)
         prob = 0
 
-        for i in range(len(splitted) - self.n + 1):
-            ngram = self.get_ngram_by_index(splitted, i)
+        for i in range(len(splitted) - 1, -1, -1):
+            ngram = self.get_ngram_by_last_index(splitted, i, None)
             context, last_gram = self.split_context_gram(ngram)
-            if context in self.context_dict and last_gram in self.context_dict[context]:
-                prob += math.log(self.get_prob(ngram))
+            context_len = len(self.split(context))
+            if context in self.context_by_n[context_len] and last_gram in self.context_by_n[context_len][context]:
+                prob += math.log(self.get_prob(context, last_gram))
             else:
-                prob += math.log(self.smooth(ngram))
-        # if len(splitted) == 1:  # unigram
-        #     gram = splitted[0]
-        #     if gram in self.all_ngram_by_n[1]:  # c_i/N
-        #         prob += math.log(self.all_ngram_by_n[1][gram] / sum(self.all_ngram_by_n[1].values()))
-        #     else:
-        #         prob += math.log(self.smooth(gram))
-        # else:  # n=>2
-        #     context_idx = 0 if len(splitted) - self.n < 0 else len(splitted) - self.n
-        #     context, gram = splitted[context_idx:-1], splitted[-1]
-        #     if self.join(context) in self.all_ngram_by_n[len(context)] and self.join(splitted[context_idx:]) in \
-        #             self.all_ngram_by_n[len(splitted[context_idx:])]:  # regular prob
-        #         prob += math.log(self.all_ngram_by_n[len(splitted[context_idx:])][self.join(splitted[context_idx:])] /
-        #                          self.all_ngram_by_n[len(context)][self.join(context)])
-        #     else:
-        #         prob += math.log(self.smooth(normalized_text[-self.n:]))
-        #
-        #     if (len(
-        #             splitted) - self.n) > 0:  # if the number if rest words is bigger than n, we need to evaluate on only window size words
-        #         prob += self.evaluate(self.join(splitted[:-1]))
-        #     else:
-        #         prob += self.evaluate(self.join(context))
+                prob += math.log(self.smooth(context))
         return prob
 
-    def get_prob(self, ngram):
+    def get_prob(self, context, last_gram):
         """
         Calculate the probability to ngram. The probability the the last gram will be after the context.
         The calculation is the (number of occurrences of the ngram) / (number of occurrences of the context)
 
             Args:
-                ngram: the text we want to calculate his probability to be evaluate.
+                context (str): the context of the ngram we want to calculate its prob
+                last_gram (str): the last_gram of the ngram we want to calculate its prob
 
             Returns:
                 prob (float): the probability of the ngram to be evaluate.
         """
-        context, last_gram = self.split_context_gram(ngram)
-        c_ngram = self.context_dict[context][last_gram]
-        c_context = sum(self.context_dict[context].values())
+        context_len = len(self.split(context))
+        c_ngram = self.context_by_n[context_len][context][last_gram]
+        c_context = sum(self.context_by_n[context_len][context].values())
         return c_ngram / c_context
 
-    def smooth(self, ngram):
+    def smooth(self, context):
         """Returns the smoothed (Laplace) probability of the specified ngram.
 
             Args:
-                ngram (str): the ngram to have it's probability smoothed
+                context (str): the context of the ngram we want to calculate its prob
 
             Returns:
                 float. The smoothed probability.
         """
-        context, last_gram = self.split_context_gram(ngram)
         c_context = 0
-        if context in self.context_dict:
-            c_context = sum(self.context_dict[context].values())
+        context_len = len(self.split(context))
+        if context in self.context_by_n[context_len]:
+            c_context = sum(self.context_by_n[context_len][context].values())
         return 1 / (c_context + self.V)
 
 
@@ -282,7 +282,8 @@ def normalize_text(text, lower=True, pad_punc=True):
     if lower:
         normalized_text = normalized_text.lower()
     if pad_punc:
-        normalized_text = re.sub('(?<! )(?=[.,!?()!@#$%^&*\n\"])|(?<=[.,!?()!@#$%^&*\n\"])(?! )', r' ', normalized_text).strip()
+        normalized_text = re.sub('(?<! )(?=[.,!?()!@#$%^&*\n\"])|(?<=[.,!?()!@#$%^&*\n\"])(?! )', r' ',
+                                 normalized_text).strip()
     return normalized_text
 
 
