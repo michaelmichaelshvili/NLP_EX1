@@ -23,7 +23,7 @@ class Ngram_Language_Model:
             int)  # a dictionary of the form {ngram:count}, holding counts of all ngrams in the specified text.
         self.use_chars = chars
         self.V = None  # size of vocabulary
-        self.context_by_n = None
+        self.context_by_n = None  # dict from context size to all contexts in this size
         self.contexts_prob = []
 
     def build_model(self, text):
@@ -154,7 +154,7 @@ class Ngram_Language_Model:
             return self.join(self.split(context)[:n])
         if context_len < self.n - 1:  # The context needs to be completed
             new_context = self.get_initial_context(context)
-            if new_context is None: # context is exhausted
+            if new_context is None:  # context is exhausted
                 return context
             context = new_context
 
@@ -182,8 +182,9 @@ class Ngram_Language_Model:
         if init_context is None:
             return choices(list(self.context_by_n[self.n - 1].keys()), self.contexts_prob)[0]
         else:
-            optional_context = [context for context in self.context_by_n[self.n-1] if context.startswith(init_context)]
-            if len(optional_context)==0:
+            optional_context = [context for context in self.context_by_n[self.n - 1] if
+                                context.startswith(init_context)]
+            if len(optional_context) == 0:
                 return None
             else:
                 return choices(optional_context)[0]
@@ -214,14 +215,15 @@ class Ngram_Language_Model:
     def evaluate(self, text):
         """Returns the log-likelihood of the specified text to be a product of the model.
            Laplace smoothing should be applied if necessary.
-
+           I chose to use stupid backoff. i.e calculate also kgrams where k<n, so their context is not of size n-1.
+           I think that is more accurate method because the first grams are also important to understand the prob
+           of the text to be evaluate by the model.
            Args:
                text (str): Text to evaluate.
 
            Returns:
                Float. The float should reflect the (log) probability.
         """
-        text = normalize_text(text)
         splitted = self.split(text)
         prob = 0
 
